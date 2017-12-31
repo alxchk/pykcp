@@ -138,22 +138,27 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		"resend", "nc", NULL
 	};
 
+	int retval = 0;
 	int conv = 0;
 	int nodelay = 1;
 	int interval = 100;
 	int resend = 0;
 	int nc = 1;
+
 	PyObject *dsttarget = NULL;
+	PyObject *fd = NULL;
+	PyObject *family = NULL;
+	PyObject *raddr = NULL;
+	PyObject *rport = NULL;
 
     if (! PyArg_ParseTupleAndKeywords(
 			args, kwds, "Oi|IIII", kwds_names, &dsttarget,
 			&conv, &nodelay, &interval, &resend, &nc)) {
 
 		PyErr_SetString(kcp_ErrorObject, "Invalid arguments");
-		return -1;
+		retval = -1;
+		goto lbExit;
 	}
-
-	Py_INCREF(dsttarget);
 
 	self->ctx = ikcp_create(conv, self);
 
@@ -161,10 +166,6 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		self->send_callback = dsttarget;
 		self->ctx->output = kcp_KCPObjectType_send_callback;
 	} else if (PyTuple_Check(dsttarget)) {
-		PyObject *fd = NULL;
-		PyObject *family = NULL;
-		PyObject *raddr = NULL;
-		PyObject *rport = NULL;
 		const char *err = NULL;
 
 		int i_family = -1;
@@ -259,19 +260,22 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 
 		if (err) {
 			PyErr_SetString(kcp_ErrorObject, err);
-			return -1;
+			retval = -1;
+			goto lbExit;
 		}
 	} else if (PyInt_Check(dsttarget)) {
 		self->fd = PyInt_AsLong(dsttarget);
 		if (self->fd == -1 && PyErr_Occurred()) {
 			Py_DECREF(dsttarget);
-			return -1;
+			retval = -1;
+			goto lbExit;
 		}
 
 		if (self->fd < 0) {
 			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
 			Py_DECREF(dsttarget);
-			return -1;
+			retval = -1;
+			goto lbExit;
 		}
 
 		self->ctx->output = socksend;
@@ -279,7 +283,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 	} else {
 		PyErr_SetString(kcp_ErrorObject, "Invalid argument type");
 		Py_DECREF(dsttarget);
-		return -1;
+		retval = -1;
+		goto lbExit;
 	}
 
 	self->ctx->writelog = kcp_KCPObjectType_log_callback;
@@ -287,7 +292,13 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 	self->ctx->user = self;
 
 	ikcp_nodelay(self->ctx, nodelay, interval, resend, nc);
-    return 0;
+
+  lbExit:
+	Py_XDECREF(fd);
+	Py_XDECREF(family);
+	Py_XDECREF(raddr);
+	Py_XDECREF(rport);
+    return retval;
 }
 
 static PyObject *
@@ -307,9 +318,7 @@ kcp_KCPObjectType_set_log(PyObject *self, PyObject *val, void *data) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
 
 	if (val == Py_None || val == NULL) {
-		if (v->log_callback)
-			Py_DECREF(v->log_callback);
-
+		Py_XDECREF(v->log_callback);
 		v->log_callback = NULL;
 		return 0;
 	}
@@ -319,11 +328,9 @@ kcp_KCPObjectType_set_log(PyObject *self, PyObject *val, void *data) {
 		return -1;
 	}
 
-	if (v->log_callback)
-		Py_DECREF(v->log_callback);
-
-	Py_INCREF(val);
+	Py_XDECREF(v->log_callback);
 	v->log_callback = val;
+	Py_INCREF(v->log_callback);
 	return 0;
 }
 
@@ -854,53 +861,143 @@ kcp_KCPObjectType = {
 
 #define KCPObjectType_CheckExact(op) (Py_TYPE(op) == &kcp_KCPObjectType)
 
-static PyObject *
-kcp_dispatch(PyObject *self, PyObject *args) {
+typedef struct {
+	PyObject_HEAD
+
+	int fd;
+	int conv;
+	int nodelay;
+	int interval;
+	int resend;
+	int nc;
+
 	PyObject *table;
+} kcp_KCPDispatcherObject, *pkcp_KCPDispatcherObject;
+
+static PyObject *
+kcp_KCPDispatcherObjectType_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    pkcp_KCPDispatcherObject self;
+
+    self = (pkcp_KCPDispatcherObject)type->tp_alloc(type, 0);
+    self->fd = -1;
+	self->conv = 0;
+	self->nodelay = 0;
+	self->interval = 100;
+	self->resend = 0;
+	self->nc = 0;
+	self->table = PyDict_New();
+
+    return (PyObject *)self;
+}
+
+static void
+kcp_KCPDispatcherObjectType_dealloc(PyObject* object) {
+    pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+    self->fd = -1;
+	self->conv = 0;
+	self->nodelay = 0;
+	self->interval = 100;
+	self->resend = 0;
+	self->nc = 0;
+	Py_XDECREF(self->table);
+
+	self->ob_type->tp_free(object);
+}
+
+static int
+kcp_KCPDispatcherObjectType_init(PyObject *object, PyObject *args, PyObject *kwds)
+{
+    pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+
+	char *kwds_names[] = {
+		"fd", "conv",
+		"nodelay", "interval", "resend", "nc",
+		NULL
+	};
+
+    if (! PyArg_ParseTupleAndKeywords(
+			args, kwds, "ii|IIII", kwds_names,
+			&self->fd, &self->conv,
+			&self->nodelay, &self->interval, &self->resend, &self->nc)) {
+
+		PyErr_SetString(kcp_ErrorObject, "Invalid arguments");
+		return -1;
+	}
+
+	if (self->fd < 0) {
+		PyErr_SetString(kcp_ErrorObject, "Bad fd");
+		return -1;
+	}
+
+	return 0;
+}
+
+static PyObject*
+kcp_KCPDispatcherObjectType_get(PyObject* object,  PyObject* val) {
+	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+	if (!PyString_CheckExact(val)) {
+		PyErr_SetString(kcp_ErrorObject, "Key should be string (\"host:port\")");
+		return NULL;
+	}
+
+	return PyMapping_GetItemString(self->table, PyString_AS_STRING(val));
+}
+
+static PyObject*
+kcp_KCPDispatcherObjectType_keys(PyObject* object,  PyObject* val) {
+	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+	return PyMapping_Keys(self->table);
+}
+
+static PyObject*
+kcp_KCPDispatcherObjectType_delete(PyObject* object,  PyObject* val) {
+	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+
+	if (!val || !PyString_CheckExact(val)) {
+		PyErr_SetString(kcp_ErrorObject, "Key should be string (\"host:port\")");
+		return NULL;
+	}
+
+	PyMapping_DelItemString(self->table, PyString_AS_STRING(val));
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+static PyObject*
+kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
+	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
+	Py_ssize_t pos = 0;
 	PyObject *key, *value;
+	IUINT32 now = iclock();
+	int update = -1, minupdate = -1, unsent = 0;
+	int same = 0;
+
+	struct timeval tv;
+	fd_set rfds;
+	int retval;
+	ssize_t msgsize;
+
+	char buf[8196];
+	struct sockaddr addr;
+	socklen_t addrlen = 0;
+	int port;
+	char skey[1024];
+	PyObject *pykey = NULL;
+
 	PyObject *new = NULL;
 	PyObject *updated = NULL;
 	PyObject *failed = NULL;
-	Py_ssize_t pos = 0;
-	int minupdate = -1;
-	int unsent = -1;
-	struct timeval tv;
-	fd_set rfds;
-	int fd;
-	int maxmsg;
-	int retval;
-	ssize_t msgsize;
-	IUINT32 now = iclock();
-	char buf[8196];
-	struct sockaddr addr;
-	socklen_t addrlen;
+	PyObject *result = NULL;
 
-	memset(&tv, 0x0, sizeof(tv));
+	pkcp_KCPObject kcp = NULL;
 
-	if (!PyArg_ParseTuple(args, "iiO", &fd, &maxmsg, &table)) {
-		PyErr_SetString(kcp_ErrorObject, "Invalid arguments");
-		return NULL;
-	}
+	memset(&addr, 0x0, sizeof(addr));
 
-	if (fd < 0 || fd > 1024) {
-		PyErr_SetString(kcp_ErrorObject, "Bad fd");
-		return NULL;
-	}
+	Py_INCREF(self->table);
 
-	if (!PyDict_Check(table)) {
-		PyErr_SetString(kcp_ErrorObject, "Argument should dict of KCP objects with addrinfo as key");
-		return NULL;
-	}
-
-	while (PyDict_Next(table, &pos, &key, &value)) {
+	while (PyDict_Next(self->table, &pos, &key, &value)) {
 		pkcp_KCPObject kcp;
-		int update;
-
-		if (!KCPObjectType_CheckExact(value)) {
-			PyErr_SetString(kcp_ErrorObject, "Elements of table should be KCP objects");
-			return NULL;
-		}
-
 		kcp = (pkcp_KCPObject) value;
 		if (unsent < 1 ) {
 			unsent = ikcp_waitsnd(kcp->ctx);
@@ -914,8 +1011,10 @@ kcp_dispatch(PyObject *self, PyObject *args) {
 		}
 	}
 
+	kcp = NULL;
+
 	FD_ZERO(&rfds);
-	FD_SET(fd, &rfds);
+	FD_SET(self->fd, &rfds);
 
 	if (unsent) {
 		if (minupdate > -1) {
@@ -927,11 +1026,12 @@ kcp_dispatch(PyObject *self, PyObject *args) {
 	}
 
 	Py_BEGIN_ALLOW_THREADS
-	retval = select(fd+1, &rfds, NULL, NULL, minupdate > -1 ? &tv : NULL);
+	retval = select(self->fd+1, &rfds, NULL, NULL, minupdate > -1 ? &tv : NULL);
 	Py_END_ALLOW_THREADS
 
 	if (retval == -1) {
-		return PyErr_SetFromErrno(PyExc_OSError);
+		PyErr_SetFromErrno(PyExc_OSError);
+		goto lbExit;
 	}
 
 	new = PySet_New(NULL);
@@ -943,15 +1043,12 @@ kcp_dispatch(PyObject *self, PyObject *args) {
 	}
 
 	for (;;) {
-		char addrinfoparsed[512];
-		int addrinfostrl;
-		int port;
-		int family;
-		size_t offset;
-		pkcp_KCPObject kcp;
+		struct sockaddr this_addr;
+		socklen_t this_addrlen;
+		int this_port;
 
-		addrlen = sizeof(addr);
-		msgsize = recvfrom(fd, buf, sizeof(buf), 0, &addr, &addrlen);
+		this_addrlen = sizeof(this_addr);
+		msgsize = recvfrom(self->fd, buf, sizeof(buf), 0, &this_addr, &this_addrlen);
 
 		if (msgsize == -1) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
@@ -962,89 +1059,178 @@ kcp_dispatch(PyObject *self, PyObject *args) {
 			}
 		}
 
-		switch (addrlen) {
-		case INET6_ADDRSTRLEN:
-			port = ntohs(((struct sockaddr_in6*)&addr)->sin6_port);
-			family = AF_INET6;
-			offset = offsetof(struct sockaddr_in6, sin6_addr);
-			break;
-		case INET_ADDRSTRLEN:
-			port = ntohs(((struct sockaddr_in*)&addr)->sin_port);
-			family = AF_INET;
-			offset = offsetof(struct sockaddr_in, sin_addr);
-			break;
-		default:
-			PyErr_SetString(kcp_ErrorObject, "Uknown address type");
-			goto lbError;
-		}
+		if (!kcp || this_addrlen != addrlen || this_port != port || memcmp(&addr, &this_addr, this_addrlen)) {
+			char addrinfoparsed[512];
+			int family;
+			size_t offset;
 
-		if (!inet_ntop(family, ((char*)&addr) + offset, addrinfoparsed, sizeof(addrinfoparsed))) {
-			PyErr_SetFromErrno(PyExc_OSError);
-			goto lbError;
-		}
-
-		key = Py_BuildValue("(si)", addrinfoparsed, port);
-		value = PyDict_GetItem(table, key);
-		if (!value) {
-			kcp = PyObject_New(kcp_KCPObject, &kcp_KCPObjectType);
-			PyObject_Init((PyObject *) kcp, &kcp_KCPObjectType);
-			kcp->fd = fd;
-			kcp->ctx = ikcp_create(0, kcp);
-			memcpy(&kcp->dst, &addr, addrlen);
-			kcp->dst_len = addrlen;
-			kcp->ctx->writelog = kcp_KCPObjectType_log_callback;
-			kcp->ctx->output = socksend;
-
-			ikcp_nodelay(kcp->ctx, 1, 32, 1, 1);
-
-			if (PyDict_SetItem(table, key, (PyObject *) kcp) == -1) {
-				PyErr_SetString(kcp_ErrorObject, "Can't assign value to table");
-				Py_DECREF(kcp);
-				Py_DECREF(key);
+			switch (this_addrlen) {
+			case INET6_ADDRSTRLEN:
+				this_port = ntohs(((struct sockaddr_in6*)&this_addr)->sin6_port);
+				family = AF_INET6;
+				offset = offsetof(struct sockaddr_in6, sin6_addr);
+				break;
+			case INET_ADDRSTRLEN:
+				this_port = ntohs(((struct sockaddr_in*)&this_addr)->sin_port);
+				family = AF_INET;
+				offset = offsetof(struct sockaddr_in, sin_addr);
+				break;
+			default:
+				PyErr_SetString(kcp_ErrorObject, "Uknown address type");
 				goto lbError;
 			}
 
-			PySet_Add(new, key);
+			if (!inet_ntop(family, ((char*)&this_addr) + offset, addrinfoparsed, sizeof(addrinfoparsed))) {
+				PyErr_SetFromErrno(PyExc_OSError);
+				goto lbError;
+			}
+
+			same = 0;
+
+			snprintf(skey, sizeof(skey)-1, "%s:%d", addrinfoparsed, this_port);
+			Py_XDECREF(pykey);
+			pykey = PyString_FromString(skey);
+
+			memcpy(&addr, &this_addr, this_addrlen);
+			addrlen = this_addrlen;
+			port = this_port;
+
+			kcp = (pkcp_KCPObject) PyDict_GetItem(self->table, pykey);
+
+			if (!kcp) {
+				PyObject *pynew;
+
+				kcp = PyObject_New(kcp_KCPObject, &kcp_KCPObjectType);
+				PyObject_Init((PyObject *) kcp, &kcp_KCPObjectType);
+
+				kcp->fd = self->fd;
+				kcp->ctx = ikcp_create(self->conv, kcp);
+				memcpy(&kcp->dst, &this_addr, this_addrlen);
+				kcp->dst_len = this_addrlen;
+				kcp->ctx->writelog = kcp_KCPObjectType_log_callback;
+				kcp->ctx->output = socksend;
+
+				ikcp_nodelay(
+					kcp->ctx,
+					self->nodelay,
+					self->interval,
+					self->resend,
+					self->nc
+				);
+
+				if (PyDict_SetItem(self->table, pykey, (PyObject *) kcp) == -1) {
+					PyErr_SetString(kcp_ErrorObject, "Can't assign value to table");
+					Py_DECREF(kcp);
+					goto lbError;
+				}
+
+				pynew = PyTuple_Pack(2, pykey, kcp);
+				PySet_Add(new, pynew);
+				Py_DECREF(pynew);
+				Py_DECREF(kcp);
+			}
 		} else {
-			kcp = (pkcp_KCPObject) value;
+			same = 1;
 		}
 
 		if (!msgsize) {
-			PySet_Add(failed, key);
+			PySet_Add(failed, pykey);
 		} else {
 			retval = ikcp_input(kcp->ctx, buf, msgsize);
 			if (retval < 0) {
-				PySet_Add(failed, key);
+				PySet_Add(failed, pykey);
 			} else {
-				PySet_Add(updated, key);
-			}
-
-			maxmsg --;
-			if (! maxmsg) {
-				break;
+				if (!same)
+					PySet_Add(updated, pykey);
 			}
 		}
 	}
 
   lbExit:
-	return Py_BuildValue("(OOO)", new, updated, failed);
+	result = PyTuple_Pack(3, new, updated, failed);
 
   lbError:
-	Py_DECREF(new);
-	Py_DECREF(updated);
-	Py_DECREF(failed);
-	return NULL;
+	Py_XDECREF(pykey);
+	Py_XDECREF(new);
+	Py_XDECREF(updated);
+	Py_XDECREF(failed);
+
+	Py_DECREF(self->table);
+	return result;
 }
 
+
 static PyMethodDef
-kcp_methods[] = {
-    {
-		"dispatch", (PyCFunction)kcp_dispatch, METH_VARARGS,
-		"dispatch(fd, maxmsg, dict[addr]kcp) -> new addr // "
-			"Receive data from socket and dispatch",
-    },
+kcp_KCPDispatcherObjectType_methods[] = {
+	{
+		"get", (PyCFunction)kcp_KCPDispatcherObjectType_get, METH_O,
+		"Get KCP Object by key (\"ip:port\"))",
+	},
+	{
+		"keys", (PyCFunction)kcp_KCPDispatcherObjectType_keys, METH_NOARGS,
+		"Return all registered keys (\"ip:port\"))",
+	},
+	{
+		"delete", (PyCFunction)kcp_KCPDispatcherObjectType_delete, METH_O,
+		"Delete KCP Object by key (\"ip:port\"))",
+	},
+	{
+		"dispatch", (PyCFunction)kcp_KCPDispatcherObjectType_dispatch, METH_NOARGS,
+		"Wait and return changed keys (\"ip:port\"))",
+	},
 	{NULL}
 };
+
+
+static PyTypeObject
+kcp_KCPDispatcherObjectType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "kcp.KCPDispatcher",                 /* tp_name */
+    sizeof(kcp_KCPDispatcherObject),     /* tp_basicsize */
+    0,                                   /* tp_itemsize */
+    kcp_KCPDispatcherObjectType_dealloc, /* tp_dealloc */
+    0,                                   /* tp_print */
+    0,                                   /* tp_getattr */
+    0,                                   /* tp_setattr */
+    0,                                   /* tp_compare */
+    0,                                   /* tp_repr */
+    0,                                   /* tp_as_number */
+    0,                                   /* tp_as_sequence */
+    0,                                   /* tp_as_mapping */
+    0,                                   /* tp_hash */
+    0,                                   /* tp_call */
+    0,                                   /* tp_str */
+    0,                                   /* tp_getattro */
+    0,                                   /* tp_setattro */
+    0,                                   /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT,                  /* tp_flags */
+
+    "KCPDispatcher(fd, id, nodelay=ENABLE_NODELAY, "
+		"interval=100, resend=ENABLE_FAST_RESEND, "
+		"nc=DISABLE_CONGESTION_CONTROL)", /* tp_doc */
+
+
+    0,                                    /* tp_traverse */
+    0,                                    /* tp_clear */
+    0,                                    /* tp_richcompare */
+    0,                                    /* tp_weaklistoffset */
+    0,                                    /* tp_iter */
+    0,                                    /* tp_iternext */
+    kcp_KCPDispatcherObjectType_methods,  /* tp_methods */
+    0,                                    /* tp_members */
+    0,                                    /* tp_getset */
+    0,                                    /* tp_base */
+    0,                                    /* tp_dict */
+    0,                                    /* tp_descr_get */
+    0,                                    /* tp_descr_set */
+    0,                                    /* tp_dictoffset */
+    (initproc)kcp_KCPDispatcherObjectType_init, /* tp_init */
+    0,                                    /* tp_alloc */
+    kcp_KCPDispatcherObjectType_new,      /* tp_new */
+};
+
+#define KCPDispatcherObjectType_CheckExact(op)	\
+	(Py_TYPE(op) == &kcp_KCPDispatcherObjectType)
 
 DL_EXPORT(void)
 initkcp(void)
@@ -1052,7 +1238,10 @@ initkcp(void)
 	if (PyType_Ready(&kcp_KCPObjectType) < 0)
         return;
 
-	PyObject *kcp = Py_InitModule3("kcp", kcp_methods, "KCP python bindings");
+	if (PyType_Ready(&kcp_KCPDispatcherObjectType) < 0)
+        return;
+
+	PyObject *kcp = Py_InitModule3("kcp", NULL, "KCP python bindings");
     if (!kcp) {
         return;
     }
@@ -1071,5 +1260,7 @@ initkcp(void)
     PyModule_AddObject(kcp, "Error", kcp_ErrorObject);
 
 	Py_INCREF(&kcp_KCPObjectType);
+	Py_INCREF(&kcp_KCPDispatcherObjectType);
     PyModule_AddObject(kcp, "KCP", (PyObject *)&kcp_KCPObjectType);
+    PyModule_AddObject(kcp, "KCPDispatcher", (PyObject *)&kcp_KCPDispatcherObjectType);
 }
