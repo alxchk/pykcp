@@ -1,4 +1,5 @@
 *.o
 *.so
+*.pyd
 build
 *.egg-info

@@ -3,7 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+#if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64) || defined(_MSC_VER)
 #include <windows.h>
 #elif !defined(__unix)
 #define __unix
@@ -57,22 +57,8 @@ static inline unsigned long long itimeofday()
 	return sec1 + sec2;
 
 	#else
-	static long mode = 0, addsec = 0;
-	BOOL retval;
-	static IINT64 freq = 1;
-	IINT64 qpc;
-	if (mode == 0) {
-		retval = QueryPerformanceFrequency((LARGE_INTEGER*)&freq);
-		freq = (freq == 0)? 1 : freq;
-		retval = QueryPerformanceCounter((LARGE_INTEGER*)&qpc);
-		addsec = (unsigned long)time(NULL);
-		addsec = addsec - (unsigned long)((qpc / freq) & 0x7fffffff);
-		mode = 1;
-	}
-	retval = QueryPerformanceCounter((LARGE_INTEGER*)&qpc);
-	retval = retval * 2;
-
-	return (((unsigned long)(qpc / freq) + addsec)*1000) + (((unsigned long)((qpc % freq) * 1000 / freq)));
+	unsigned long long r = GetTickCount();
+	return r;
 	#endif
 }
 
