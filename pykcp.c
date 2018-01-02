@@ -709,7 +709,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 				break;
 			}
 
-			if (ikcp_waitsnd(v->ctx) == 0) {
+			if (ikcp_waitsnd(v->ctx) == 0 && retval == 0) {
 				tosleep = maxsleep - (current - start);
 			}
 		}
@@ -1003,9 +1003,12 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	Py_ssize_t pos = 0;
 	PyObject *key, *value;
 	IUINT32 now = iclock();
-	int update = -1, minupdate = -1, unsent = 0;
+	int update = -1, minupdate = -1, unsent = 0, unacked = 0;
 	int have_clients = 0;
-	int same = 0;
+	int update_pushed = 0;
+	int ready = 0;
+	int cycles = 0;
+	int use_timeout = 0;
 
 	struct timeval tv;
 	struct timeval *effective_tv = NULL;
@@ -1031,10 +1034,19 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 	Py_INCREF(self->table);
 
+	new = PySet_New(NULL);
+	updated = PySet_New(NULL);
+	failed = PySet_New(NULL);
+
+ lbAgain:
 	while (PyDict_Next(self->table, &pos, &key, &value)) {
 		pkcp_KCPObject tmpkcp = (pkcp_KCPObject) value;
 		if (unsent < 1 ) {
 			unsent = ikcp_waitsnd(tmpkcp->ctx);
+		}
+
+		if (tmpkcp->ctx->ackcount) {
+			unacked = 1;
 		}
 
 		ikcp_update(tmpkcp->ctx, now);
@@ -1050,35 +1062,33 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	FD_ZERO(&rfds);
 	FD_SET(self->fd, &rfds);
 
-	if (unsent && minupdate > -1) {
+	if ((unsent || unacked) && minupdate > -1) {
 		if (minupdate == 0) {
 			minupdate = self->interval;
 		}
 
 		tv.tv_sec = minupdate / 1000;
 		tv.tv_usec = ( minupdate % 1000 ) * 1000;
+		use_timeout = 1;
 	} else if (self->timeout > -1 && have_clients) {
-		minupdate = self->timeout;
-		tv.tv_sec = minupdate / 1000;
-		tv.tv_usec = ( minupdate % 1000 ) * 1000;
+		if (!cycles) {
+			minupdate = self->timeout;
+			tv.tv_sec = minupdate / 1000;
+			tv.tv_usec = ( minupdate % 1000 ) * 1000;
+		}
+		use_timeout = 1;
 	} else {
-		minupdate = -1;
+		use_timeout = 0;
 	}
 
 	Py_BEGIN_ALLOW_THREADS
-	retval = select(self->fd+1, &rfds, NULL, NULL, minupdate > -1 ? &tv : NULL);
+	retval = select(self->fd+1, &rfds, NULL, NULL, use_timeout ? &tv : NULL);
 	Py_END_ALLOW_THREADS
 
-	if (retval == -1) {
+	switch (retval) {
+	case -1:
 		PyErr_SetFromErrno(PyExc_OSError);
-		goto lbExit;
-	}
-
-	new = PySet_New(NULL);
-	updated = PySet_New(NULL);
-	failed = PySet_New(NULL);
-
-	if (!retval) {
+	case 0:
 		goto lbExit;
 	}
 
@@ -1133,7 +1143,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 				goto lbError;
 			}
 
-			same = 0;
+			update_pushed = 0;
 
 			snprintf(skey, sizeof(skey)-1, "%s:%d", addrinfoparsed, this_port);
 			Py_XDECREF(pykey);
@@ -1159,6 +1169,8 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 				kcp->dst_len = this_addrlen;
 				kcp->ctx->writelog = kcp_KCPObjectType_log_callback;
 				kcp->ctx->output = socksend;
+				kcp->send_callback = NULL;
+				kcp->log_callback = NULL;
 
 				ikcp_nodelay(
 					kcp->ctx,
@@ -1176,27 +1188,32 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 				pynew = PyTuple_Pack(2, pykey, kcp);
 				PySet_Add(new, pynew);
+				ready += 1;
 			} else {
 				Py_INCREF(kcp);
 			}
-		} else {
-			same = 1;
 		}
 
 		if (!msgsize) {
 			PySet_Add(failed, pykey);
+			ready += 1;
 		} else {
 			retval = ikcp_input(kcp->ctx, buf, msgsize);
 			if (retval < 0) {
 				if (pynew) {
 					PySet_Discard(new, pynew);
 					PyDict_DelItem(self->table, pykey);
+					ready -= 1;
 				} else {
 					PySet_Add(failed, pykey);
+					ready += 1;
 				}
 			} else {
-				if (!same)
+				if (! (update_pushed || iqueue_is_empty(&kcp->ctx->rcv_queue))) {
 					PySet_Add(updated, pykey);
+					update_pushed = 1;
+					ready += 1;
+				}
 			}
 		}
 
@@ -1204,6 +1221,11 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	}
 
   lbExit:
+	if (!ready && ( minupdate < 0 || (tv.tv_sec && tv.tv_usec))) {
+		cycles += 1;
+		goto lbAgain;
+	}
+
 	result = PyTuple_Pack(3, new, updated, failed);
 
   lbError:
