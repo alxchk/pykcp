@@ -156,7 +156,7 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 	int retval = 0;
 	int conv = 0;
 	int nodelay = 1;
-	int interval = 100;
+	int interval = 32;
 	int resend = 0;
 	int nc = 1;
 
@@ -710,7 +710,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 				break;
 			}
 
-			if (ikcp_waitsnd(v->ctx) == 0 && retval == 0) {
+			if (ikcp_waitsnd(v->ctx) == 0 && retval == 0 && !v->ctx->ackcount) {
 				tosleep = maxsleep - (current - start);
 			}
 		}
