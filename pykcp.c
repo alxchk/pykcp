@@ -1221,7 +1221,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	}
 
   lbExit:
-	if (!ready && ( minupdate < 0 || (tv.tv_sec && tv.tv_usec))) {
+	if (!ready && ( minupdate < 0 || tv.tv_sec || tv.tv_usec)) {
 		cycles += 1;
 		goto lbAgain;
 	}
