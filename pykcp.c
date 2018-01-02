@@ -110,6 +110,7 @@ kcp_KCPObjectType_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     pkcp_KCPObject self;
 
     self = (pkcp_KCPObject)type->tp_alloc(type, 0);
+
     self->fd = -1;
     self->ctx = NULL;
     self->log_callback = NULL;
@@ -1156,22 +1157,19 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 			Py_XDECREF(kcp);
 			kcp = (pkcp_KCPObject) PyDict_GetItem(self->table, pykey);
 			if (!kcp) {
+				PyObject *args = NULL;
+
 				if (!msgsize) {
 					continue;
 				}
 
-				kcp = PyObject_New(kcp_KCPObject, &kcp_KCPObjectType);
-				PyObject_Init((PyObject *) kcp, &kcp_KCPObjectType);
+				/* Manual allocation */
+				args = Py_BuildValue("II", self->fd, self->conv);
+				kcp = (pkcp_KCPObject) PyObject_CallObject((PyObject *) &kcp_KCPObjectType, args);
+				Py_DECREF(args);
 
-				kcp->fd = self->fd;
-				kcp->ctx = ikcp_create(self->conv, kcp);
 				memcpy(&kcp->dst, &this_addr, this_addrlen);
 				kcp->dst_len = this_addrlen;
-				kcp->ctx->writelog = kcp_KCPObjectType_log_callback;
-				kcp->ctx->output = socksend;
-				kcp->send_callback = NULL;
-				kcp->log_callback = NULL;
-
 				ikcp_nodelay(
 					kcp->ctx,
 					self->nodelay,
@@ -1205,8 +1203,10 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 					PyDict_DelItem(self->table, pykey);
 					ready -= 1;
 				} else {
-					PySet_Add(failed, pykey);
-					ready += 1;
+					if (PyDict_GetItem(self->table, pykey)) {
+						PySet_Add(failed, pykey);
+						ready += 1;
+					}
 				}
 			} else {
 				if (! (update_pushed || iqueue_is_empty(&kcp->ctx->rcv_queue))) {
