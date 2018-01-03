@@ -199,11 +199,16 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 
 		fd = PyTuple_GetItem(dsttarget, 0);
 		if (!PyInt_Check(fd)) {
-			err = "Invalid fd type";
-			goto lbEnd;
+			if (PyLong_Check(fd)) {
+				self->fd = PyLong_AsLong(fd);
+			} else {
+				err = "Invalid fd type";
+				goto lbEnd;
+			}
+		} else {
+			self->fd = PyInt_AsLong(fd);
 		}
 
-		self->fd = PyInt_AsLong(fd);
 		if (self->fd == -1 && PyErr_Occurred()) {
 			err = "Bad fd";
 			goto lbEnd;
@@ -280,6 +285,23 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		}
 	} else if (PyInt_Check(dsttarget)) {
 		self->fd = PyInt_AsLong(dsttarget);
+		if (self->fd == -1 && PyErr_Occurred()) {
+			Py_DECREF(dsttarget);
+			retval = -1;
+			goto lbExit;
+		}
+
+		if (self->fd == INVALID_SOCKET) {
+			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
+			Py_DECREF(dsttarget);
+			retval = -1;
+			goto lbExit;
+		}
+
+		self->ctx->output = socksend;
+		Py_DECREF(dsttarget);
+	} else if (PyLong_Check(dsttarget)) {
+		self->fd = PyLong_AsLong(dsttarget);
 		if (self->fd == -1 && PyErr_Occurred()) {
 			Py_DECREF(dsttarget);
 			retval = -1;
