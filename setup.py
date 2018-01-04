@@ -5,8 +5,9 @@ system = platform.system()
 if system == 'Windows':
     cflags = []
     libs = [ 'ws2_32' ]
+
 else:
-    cflags = [ '-g', '-O3' ]
+    cflags = [ '-g', '-O3', '-Wall', '-std=gnu89' ]
     if system == 'Linux':
         libs = [ 'rt' ]
     else:

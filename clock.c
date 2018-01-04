@@ -19,7 +19,7 @@
 #endif
 
 /* get system time */
-static inline unsigned long long itimeofday()
+static inline unsigned long long itimeofday(void)
 {
 #if defined(__unix)
 	struct timespec spec = {};
@@ -62,7 +62,7 @@ static inline unsigned long long itimeofday()
 	#endif
 }
 
-static inline IUINT32 iclock()
+static inline IUINT32 iclock(void)
 {
 	unsigned long long msecs;
 	msecs = itimeofday();

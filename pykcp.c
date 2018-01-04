@@ -22,7 +22,73 @@ typedef int SOCKET;
 #define INVALID_SOCKET	-1
 #endif
 
+#define RETURN_NONE do {							\
+		Py_INCREF(Py_None); return Py_None;			\
+	} while(0)
+
 static PyObject *kcp_ErrorObject = NULL;
+
+static inline int
+PyObject_ToLong(PyObject *object, long *value) {
+	long result;
+
+	if (!object) {
+		return 0;
+	}
+
+	if (!PyInt_Check(object)) {
+		if (!PyLong_Check(object)) {
+			return 0;
+		} else {
+			result = PyLong_AsLong(object);
+		}
+	} else {
+		result = PyInt_AsLong(object);
+	}
+
+	if (result == -1 && PyErr_Occurred())
+		return 0;
+
+	if (value) {
+		*value = (int) result;
+	}
+
+	return 1;
+}
+
+static inline int
+PyObject_ToInt(PyObject *object, int *value) {
+	long result;
+	if (!PyObject_ToLong(object, &result)) {
+		return 0;
+	}
+
+	if (result < INT_MIN || result > INT_MAX) {
+		return 0;
+	}
+
+	if (value)
+		*value = result;
+
+	return 1;
+}
+
+static inline int
+PyObject_ToUInt(PyObject *object, unsigned int *value) {
+	long result;
+	if (!PyObject_ToLong(object, &result)) {
+		return 0;
+	}
+
+	if (result < 0 || result > UINT_MAX) {
+		return 0;
+	}
+
+	if (value)
+		*value = result;
+
+	return 1;
+}
 
 typedef struct {
 	PyObject_HEAD
@@ -198,19 +264,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		}
 
 		fd = PyTuple_GetItem(dsttarget, 0);
-		if (!PyInt_Check(fd)) {
-			if (PyLong_Check(fd)) {
-				self->fd = PyLong_AsLong(fd);
-			} else {
-				err = "Invalid fd type";
-				goto lbEnd;
-			}
-		} else {
-			self->fd = PyInt_AsLong(fd);
-		}
-
-		if (self->fd == -1 && PyErr_Occurred()) {
-			err = "Bad fd";
+		if (!PyObject_ToInt(fd, &self->fd)) {
+			err = "Invalid fd type";
 			goto lbEnd;
 		}
 
@@ -220,14 +275,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		}
 
 		family = PyTuple_GetItem(dsttarget, 1);
-		if (!PyInt_Check(family)) {
+		if (!PyObject_ToInt(family, &i_family)) {
 			err = "Invalid family type";
-			goto lbEnd;
-		}
-
-		i_family = PyInt_AsLong(family);
-		if (i_family == -1 && PyErr_Occurred()) {
-			err = "Bad family";
 			goto lbEnd;
 		}
 
@@ -240,14 +289,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		s_raddr = PyString_AsString(raddr);
 
 		rport = PyTuple_GetItem(dsttarget, 3);
-		if (!PyInt_Check(rport)) {
+		if (!PyObject_ToInt(rport, &i_port)) {
 			err = "Invalid port type";
-			goto lbEnd;
-		}
-
-		i_port = PyInt_AsLong(rport);
-		if (i_port == -1 && PyErr_Occurred()) {
-			err = "Bad port";
 			goto lbEnd;
 		}
 
@@ -283,31 +326,7 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 			retval = -1;
 			goto lbExit;
 		}
-	} else if (PyInt_Check(dsttarget)) {
-		self->fd = PyInt_AsLong(dsttarget);
-		if (self->fd == -1 && PyErr_Occurred()) {
-			Py_DECREF(dsttarget);
-			retval = -1;
-			goto lbExit;
-		}
-
-		if (self->fd == INVALID_SOCKET) {
-			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
-			Py_DECREF(dsttarget);
-			retval = -1;
-			goto lbExit;
-		}
-
-		self->ctx->output = socksend;
-		Py_DECREF(dsttarget);
-	} else if (PyLong_Check(dsttarget)) {
-		self->fd = PyLong_AsLong(dsttarget);
-		if (self->fd == -1 && PyErr_Occurred()) {
-			Py_DECREF(dsttarget);
-			retval = -1;
-			goto lbExit;
-		}
-
+	} else if (PyObject_ToInt(dsttarget, &self->fd)) {
 		if (self->fd == INVALID_SOCKET) {
 			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
 			Py_DECREF(dsttarget);
@@ -346,8 +365,7 @@ kcp_KCPObjectType_get_log(PyObject *self, void *data) {
 		return v->log_callback;
 	}
 
-	Py_INCREF(Py_None);
-	return Py_None;
+	RETURN_NONE;
 }
 
 static int
@@ -393,15 +411,10 @@ kcp_KCPObjectType_get_mtu(PyObject *self, void *data) {
 static int
 kcp_KCPObjectType_set_mtu(PyObject *self, PyObject *val, void *data) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
-	long i;
+	int i;
 
-	if (!(val && PyInt_Check(val))) {
+	if (!PyObject_ToInt(val, &i)) {
 		PyErr_SetString(kcp_ErrorObject, "Argument should be integer");
-		return -1;
-	}
-
-	i = PyInt_AsLong(val);
-	if (i == -1 && PyErr_Occurred()) {
 		return -1;
 	}
 
@@ -423,15 +436,10 @@ static int
 kcp_KCPObjectType_set_wndsize(PyObject *self, PyObject *val, void *data) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
 	int snd, rcv;
+	int rcvsnd;
 
-	if (PyInt_Check(val)) {
-		long i = PyInt_AsLong(val);
-		if (i == -1 && PyErr_Occurred()) {
-			PyErr_SetString(kcp_ErrorObject, "Couldn't parse window value");
-			return -1;
-		}
-
-		ikcp_wndsize(v->ctx, i, i);
+	if (PyObject_ToInt(val, &rcvsnd)) {
+		ikcp_wndsize(v->ctx, rcvsnd, rcvsnd);
 		return 0;
 	}
 
@@ -458,7 +466,6 @@ kcp_KCPObjectType_get_conv(PyObject *self, void *data) {
 
 static PyObject *
 kcp_KCPObjectType_get_clock(PyObject *self, void *data) {
-	pkcp_KCPObject v = (pkcp_KCPObject) self;
 	return PyInt_FromLong(iclock());
 }
 
@@ -539,8 +546,7 @@ static PyObject*
 kcp_KCPObjectType_flush(PyObject* self,  PyObject* empty) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
 	ikcp_flush(v->ctx);
-	Py_INCREF(Py_None);
-	return Py_None;
+	RETURN_NONE;
 }
 
 static PyObject*
@@ -557,8 +563,9 @@ kcp_KCPObjectType_send(PyObject* self,  PyObject* data) {
 	} else if (PyString_CheckExact(data)) {
 		buf = PyString_AS_STRING(data);
 		len = PyString_GET_SIZE(data);
-	}
-	else if (data != Py_None) {
+	} else if (data == Py_None) {
+		RETURN_NONE;
+	} else {
 		PyErr_SetString(kcp_ErrorObject, "Only bytearray or string types are allowed");
 		return NULL;
 	}
@@ -573,8 +580,7 @@ kcp_KCPObjectType_send(PyObject* self,  PyObject* data) {
 		ikcp_flush(v->ctx);
 	}
 
-	Py_INCREF(Py_None);
-	return Py_None;
+	RETURN_NONE;
 }
 
 static PyObject*
@@ -587,12 +593,12 @@ kcp_KCPObjectType_submit(PyObject* self,  PyObject* data) {
 	if (PyByteArray_CheckExact(data)) {
 		buf = PyByteArray_AS_STRING(data);
 		len = PyByteArray_GET_SIZE(data);
-	}
-	else if (PyString_CheckExact(data)) {
+	} else if (PyString_CheckExact(data)) {
 		buf = PyString_AS_STRING(data);
 		len = PyString_GET_SIZE(data);
-	}
-	else if (data != Py_None) {
+	} else if (data == Py_None) {
+		RETURN_NONE;
+	} else {
 		PyErr_SetString(kcp_ErrorObject, "Only bytearray or string types are allowed");
 		return NULL;
 	}
@@ -603,15 +609,13 @@ kcp_KCPObjectType_submit(PyObject* self,  PyObject* data) {
 		return NULL;
 	}
 
-	Py_INCREF(Py_None);
-	return Py_None;
+	RETURN_NONE;
 }
 
 
 static PyObject*
 kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
-	int r = 0;
 	IUINT32 now = iclock();
 	IUINT32 current = now;
 	IUINT32 tosleep;
@@ -637,19 +641,13 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 
 	maxsleep = tosleep = ikcp_check(v->ctx, now) - now;
 	if (val) {
-		if (val != Py_None) {
-			if (!PyInt_Check(val)) {
+		if (val == Py_None) {
+			maxsleep = -1;
+		} else {
+			if (!PyObject_ToInt(val, &maxsleep)) {
 				PyErr_SetString(kcp_ErrorObject, "Argument should be integer");
 				return NULL;
 			}
-
-			maxsleep = PyInt_AsLong(val);
-			if (maxsleep == -1 && PyErr_Occurred()) {
-				return NULL;
-			}
-
-		} else {
-			maxsleep = -1;
 		}
 	}
 
@@ -743,7 +741,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 	}
 
 	if (retbuf == Py_None) {
-		Py_INCREF(Py_None);
+		RETURN_NONE;
 	}
 
 	return retbuf;
@@ -756,8 +754,7 @@ kcp_KCPObjectType_recv(PyObject* self,  PyObject* data) {
 	char *buffer = NULL;
 
 	if (len < 0) {
-		Py_INCREF(Py_None);
-		return Py_None;
+		RETURN_NONE;
 	}
 
 	buffer = malloc(len);
@@ -767,8 +764,7 @@ kcp_KCPObjectType_recv(PyObject* self,  PyObject* data) {
 
 	len = ikcp_recv(v->ctx, buffer, len);
 	if (len < 0) {
-		Py_INCREF(Py_None);
-		return Py_None;
+		RETURN_NONE;
 	}
 
 	return PyString_FromStringAndSize(buffer, len);
@@ -779,15 +775,12 @@ kcp_KCPObjectType_update_clock(PyObject* self,  PyObject* val) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
 	IUINT32 clk;
 	IUINT32 next;
-	if (!(val && PyInt_Check(val))) {
-		PyErr_SetString(kcp_ErrorObject, "Argument should be integer");
+
+	if (!PyObject_ToUInt(val, &clk)) {
+		PyErr_SetString(kcp_ErrorObject, "Argument should be unsigned integer");
 		return NULL;
 	}
 
-	clk = PyInt_AsLong(val);
-	if (clk == -1 && PyErr_Occurred()) {
-		return NULL;
-	}
 
 	ikcp_update(v->ctx, clk);
 	next = ikcp_check(v->ctx, clk) - clk;
@@ -798,15 +791,10 @@ kcp_KCPObjectType_update_clock(PyObject* self,  PyObject* val) {
 static PyObject*
 kcp_KCPObjectType_check_clock(PyObject* self,  PyObject* val) {
 	pkcp_KCPObject v = (pkcp_KCPObject) self;
-
 	IUINT32 clk;
-	if (!(val && PyInt_Check(val))) {
-		PyErr_SetString(kcp_ErrorObject, "Argument should be integer");
-		return NULL;
-	}
 
-	clk = PyInt_AsLong(val);
-	if (clk == -1 && PyErr_Occurred()) {
+	if (!PyObject_ToUInt(val, &clk)) {
+		PyErr_SetString(kcp_ErrorObject, "Argument should be unsigned integer");
 		return NULL;
 	}
 
@@ -954,6 +942,8 @@ kcp_KCPDispatcherObjectType_init(PyObject *object, PyObject *args, PyObject *kwd
 {
     pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
 
+	PyObject *fd = NULL;
+
 	char *kwds_names[] = {
 		"fd", "conv", "timeout",
 		"nodelay", "interval", "resend", "nc",
@@ -961,11 +951,16 @@ kcp_KCPDispatcherObjectType_init(PyObject *object, PyObject *args, PyObject *kwd
 	};
 
 	if (! PyArg_ParseTupleAndKeywords(
-			args, kwds, "ii|IIIII", kwds_names,
-			&self->fd, &self->conv, &self->timeout,
+			args, kwds, "Oi|IIIII", kwds_names,
+			&fd, &self->conv, &self->timeout,
 			&self->nodelay, &self->interval, &self->resend, &self->nc)) {
 
 		PyErr_SetString(kcp_ErrorObject, "Invalid arguments");
+		return -1;
+	}
+
+	if (!PyObject_ToInt(fd, &self->fd)) {
+		PyErr_SetString(kcp_ErrorObject, "Invalid fd type");
 		return -1;
 	}
 
@@ -1004,8 +999,6 @@ kcp_KCPDispatcherObjectType_keys(PyObject* object,  PyObject* val) {
 static PyObject*
 kcp_KCPDispatcherObjectType_delete(PyObject* object,  PyObject* val) {
 	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
-	PyObject *tmp;
-
 	if (!val || !PyString_CheckExact(val)) {
 		PyErr_SetString(kcp_ErrorObject, "Key should be string (\"host:port\")");
 		return NULL;
@@ -1016,8 +1009,7 @@ kcp_KCPDispatcherObjectType_delete(PyObject* object,  PyObject* val) {
 		return NULL;
 	}
 
-	Py_INCREF(Py_None);
-	return Py_None;
+	RETURN_NONE;
 }
 
 static PyObject*
@@ -1034,7 +1026,6 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	int use_timeout = 0;
 
 	struct timeval tv;
-	struct timeval *effective_tv = NULL;
 	fd_set rfds;
 	int retval;
 	ssize_t msgsize;
