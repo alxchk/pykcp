@@ -1,4 +1,4 @@
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define _WINSOCKAPI_
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -12,19 +12,23 @@
 #include "clock.c"
 
 #include <sys/types.h>
-
-#ifndef _MSC_VER
+#ifdef _WIN32
+#define PY_SOCKET_ERROR PyErr_SetExcFromWindowsErr(PyExc_OSError, WSAGetLastError())
+#else
+#define PY_SOCKET_ERROR PyErr_SetFromErrno(PyExc_OSError)
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 typedef int SOCKET;
 #define INVALID_SOCKET	-1
+#define SOCKET_ERROR -1
 #endif
 
 #define RETURN_NONE do {							\
 		Py_INCREF(Py_None); return Py_None;			\
 	} while(0)
+
 
 static PyObject *kcp_ErrorObject = NULL;
 
@@ -66,6 +70,22 @@ PyObject_ToInt(PyObject *object, int *value) {
 	if (result < INT_MIN || result > INT_MAX) {
 		return 0;
 	}
+
+	if (value)
+		*value = result;
+
+	return 1;
+}
+
+static inline int
+PyObject_ToSocket(PyObject *object, SOCKET *value) {
+	long result;
+	if (!PyObject_ToLong(object, &result)) {
+		return 0;
+	}
+
+	if (result == INVALID_SOCKET)
+		return 0;
 
 	if (value)
 		*value = result;
@@ -157,7 +177,7 @@ kcp_KCPObjectType_dealloc(PyObject* self) {
 
 	v->send_callback = NULL;
 
-	v->fd = -1;
+	v->fd = INVALID_SOCKET;
 	v->dst_len = 0;
 
 	v->send_error = 0;
@@ -177,7 +197,7 @@ kcp_KCPObjectType_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 
     self = (pkcp_KCPObject)type->tp_alloc(type, 0);
 
-    self->fd = -1;
+    self->fd = INVALID_SOCKET;
     self->ctx = NULL;
     self->log_callback = NULL;
     self->send_callback = NULL;
@@ -264,7 +284,7 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		}
 
 		fd = PyTuple_GetItem(dsttarget, 0);
-		if (!PyObject_ToInt(fd, &self->fd)) {
+		if (!PyObject_ToSocket(fd, &self->fd)) {
 			err = "Invalid fd type";
 			goto lbEnd;
 		}
@@ -326,7 +346,10 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 			retval = -1;
 			goto lbExit;
 		}
-	} else if (PyObject_ToInt(dsttarget, &self->fd)) {
+	} else if (PyObject_ToSocket(dsttarget, &self->fd)) {
+		printf("SET FD TO: %d\n", self->fd);
+
+
 		if (self->fd == INVALID_SOCKET) {
 			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
 			Py_DECREF(dsttarget);
@@ -634,7 +657,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 
 	start = now;
 
-	if (v->fd == -1 || v->send_callback) {
+	if (v->fd == INVALID_SOCKET || v->send_callback) {
 		PyErr_SetString(kcp_ErrorObject, "Function can be used when python callback used");
 		return NULL;
 	}
@@ -662,8 +685,8 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 		retval = select(v->fd+1, &rfds, NULL, NULL, maxsleep > -1 ? &tv : NULL);
 		Py_END_ALLOW_THREADS
 
-		if (retval == -1) {
-			return PyErr_SetFromErrno(PyExc_OSError);
+		if (retval == SOCKET_ERROR) {
+			return PY_SOCKET_ERROR;
 		}
 
 		if (retval == 1) {
@@ -679,7 +702,8 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 				if (r == 0)
 					break;
 
-				if (r == -1) {
+				if (r == SOCKET_ERROR) {
+
 #ifdef _WINSOCKAPI_
 					int error;
 					error = WSAGetLastError();
@@ -691,7 +715,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 						break;
 					}
 					else {
-						return PyErr_SetFromErrno(PyExc_OSError);
+						return PY_SOCKET_ERROR;
 					}
 				}
 
@@ -907,7 +931,7 @@ kcp_KCPDispatcherObjectType_new(PyTypeObject *type, PyObject *args, PyObject *kw
     pkcp_KCPDispatcherObject self;
 
     self = (pkcp_KCPDispatcherObject)type->tp_alloc(type, 0);
-    self->fd = -1;
+    self->fd = INVALID_SOCKET;
 	self->conv = 0;
 	self->nodelay = 0;
 	self->interval = 100;
@@ -924,7 +948,7 @@ static void
 kcp_KCPDispatcherObjectType_dealloc(PyObject* object) {
     pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
 
-	self->fd = -1;
+	self->fd = INVALID_SOCKET;
 	self->conv = 0;
 	self->nodelay = 0;
 	self->interval = 100;
@@ -959,13 +983,8 @@ kcp_KCPDispatcherObjectType_init(PyObject *object, PyObject *args, PyObject *kwd
 		return -1;
 	}
 
-	if (!PyObject_ToInt(fd, &self->fd)) {
+	if (!PyObject_ToSocket(fd, &self->fd)) {
 		PyErr_SetString(kcp_ErrorObject, "Invalid fd type");
-		return -1;
-	}
-
-	if (self->fd < 0) {
-		PyErr_SetString(kcp_ErrorObject, "Bad fd");
 		return -1;
 	}
 
@@ -1101,7 +1120,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 	switch (retval) {
 	case -1:
-		PyErr_SetFromErrno(PyExc_OSError);
+		return PY_SOCKET_ERROR;
 	case 0:
 		goto lbExit;
 	}
@@ -1126,7 +1145,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 		    {
 				break;
 			} else {
-				PyErr_SetFromErrno(PyExc_OSError);
+				return PY_SOCKET_ERROR;
 				goto lbError;
 			}
 		}
@@ -1153,7 +1172,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 			}
 
 			if (!inet_ntop(family, ((char*)&this_addr) + offset, addrinfoparsed, sizeof(addrinfoparsed))) {
-				PyErr_SetFromErrno(PyExc_OSError);
+				return PY_SOCKET_ERROR;
 				goto lbError;
 			}
 
