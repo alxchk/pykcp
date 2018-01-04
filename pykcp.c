@@ -350,9 +350,6 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 			goto lbExit;
 		}
 	} else if (PyObject_ToSocket(dsttarget, &self->fd)) {
-		printf("SET FD TO: %d\n", self->fd);
-
-
 		if (self->fd == INVALID_SOCKET) {
 			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
 			Py_DECREF(dsttarget);
