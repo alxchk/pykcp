@@ -324,7 +324,10 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		memset(&hints, 0, sizeof(struct addrinfo));
 		hints.ai_family = AF_UNSPEC;
 		hints.ai_socktype = SOCK_DGRAM;
+
+#ifdef AI_NUMERICSERV
 		hints.ai_flags = AI_NUMERICSERV;
+#endif
 
 		ai = getaddrinfo(s_raddr, s_port, &hints, &result);
 		if (ai != 0) {

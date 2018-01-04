@@ -41,8 +41,8 @@ static inline unsigned long long itimeofday(void)
 
 #ifdef CLOCK_REALTIME
 		if (r == -1) {
-			cid = CLOCK_MONOTONIC;
-			r = clock_gettime(CLOCK_MONOTONIC, &spec);
+			cid = CLOCK_REALTIME;
+			r = clock_gettime(CLOCK_REALTIME, &spec);
 		}
 #endif
 
