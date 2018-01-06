@@ -1157,15 +1157,19 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 			switch (this_addrlen) {
 			case INET6_ADDRSTRLEN:
+			case sizeof(struct sockaddr_in6):
 				this_port = ntohs(((struct sockaddr_in6*)&this_addr)->sin6_port);
 				family = AF_INET6;
 				offset = offsetof(struct sockaddr_in6, sin6_addr);
 				break;
+
+			case sizeof(struct sockaddr_in):
 			case INET_ADDRSTRLEN:
 				this_port = ntohs(((struct sockaddr_in*)&this_addr)->sin_port);
 				family = AF_INET;
 				offset = offsetof(struct sockaddr_in, sin_addr);
 				break;
+
 			default:
 				PyErr_SetString(kcp_ErrorObject, "Uknown address type");
 				goto lbError;
