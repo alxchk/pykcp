@@ -1034,15 +1034,15 @@ kcp_KCPDispatcherObjectType_delete(PyObject* object,  PyObject* val) {
 static PyObject*
 kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
-	Py_ssize_t pos = 0;
+	Py_ssize_t pos;
 	PyObject *key, *value;
-	IUINT32 now = iclock();
-	int update = -1, minupdate = -1, unsent = 0, unacked = 0;
-	int have_clients = 0;
-	int update_pushed = 0;
-	int ready = 0;
+	IUINT32 now, started, spent;
+	int update, minupdate, unsent, unacked;
+	int have_clients;
+	int update_pushed;
+	int ready;
 	int cycles = 0;
-	int use_timeout = 0;
+	int use_timeout;
 
 	struct timeval tv;
 	fd_set rfds;
@@ -1071,9 +1071,19 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	updated = PySet_New(NULL);
 	failed = PySet_New(NULL);
 
+	started = now = iclock();
+
  lbAgain:
+	pos = 0;
+	spent = started - now;
+	unsent = 0, unacked = 0;
+	update = -1, minupdate = -1;
+	have_clients = 0, update_pushed = 0;
+	ready = 0, use_timeout = 0;
+
 	while (PyDict_Next(self->table, &pos, &key, &value)) {
 		pkcp_KCPObject tmpkcp = (pkcp_KCPObject) value;
+
 		if (unsent < 1 ) {
 			unsent = ikcp_waitsnd(tmpkcp->ctx);
 		}
@@ -1104,11 +1114,9 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 		tv.tv_usec = ( minupdate % 1000 ) * 1000;
 		use_timeout = 1;
 	} else if (self->timeout > -1 && have_clients) {
-		if (!cycles) {
-			minupdate = self->timeout;
-			tv.tv_sec = minupdate / 1000;
-			tv.tv_usec = ( minupdate % 1000 ) * 1000;
-		}
+		minupdate = self->timeout - spent;
+		tv.tv_sec = minupdate / 1000;
+		tv.tv_usec = ( minupdate % 1000 ) * 1000;
 		use_timeout = 1;
 	} else {
 		use_timeout = 0;
@@ -1132,6 +1140,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 		int this_port;
 
 		this_addrlen = sizeof(this_addr);
+
 		msgsize = recvfrom(self->fd, buf, sizeof(buf), 0, &this_addr, &this_addrlen);
 
 		if (msgsize == -1) {
@@ -1263,6 +1272,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
   lbExit:
 	if (!ready && ( minupdate < 0 || tv.tv_sec || tv.tv_usec)) {
 		cycles += 1;
+		now = iclock();
 		goto lbAgain;
 	}
 
