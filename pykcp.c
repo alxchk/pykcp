@@ -263,6 +263,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 
 	self->ctx = ikcp_create(conv, self);
 
+	Py_INCREF(dsttarget);
+
 	if (PyFunction_Check(dsttarget)) {
 		self->send_callback = dsttarget;
 		self->ctx->output = kcp_KCPObjectType_send_callback;
@@ -343,22 +345,20 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 
 	  lbEnd:
 		Py_DECREF(dsttarget);
-
 		if (err) {
 			PyErr_SetString(kcp_ErrorObject, err);
 			retval = -1;
 			goto lbExit;
 		}
 	} else if (PyObject_ToSocket(dsttarget, &self->fd)) {
+		Py_DECREF(dsttarget);
 		if (self->fd == INVALID_SOCKET) {
 			PyErr_SetString(kcp_ErrorObject, "Invalid fd");
-			Py_DECREF(dsttarget);
 			retval = -1;
 			goto lbExit;
 		}
 
 		self->ctx->output = socksend;
-		Py_DECREF(dsttarget);
 	} else {
 		PyErr_SetString(kcp_ErrorObject, "Invalid argument type");
 		Py_DECREF(dsttarget);
