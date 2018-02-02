@@ -22,7 +22,7 @@ kcp = Extension(
 
 setup(
     name = 'KCP',
-    version = '1.0',
+    version = '1.0.1',
     description = 'Python KCP Bindings',
     ext_modules = [kcp]
 )

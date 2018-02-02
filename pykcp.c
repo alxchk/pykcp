@@ -14,6 +14,8 @@
 #include <sys/types.h>
 #ifdef _WIN32
 #define PY_SOCKET_ERROR PyErr_SetExcFromWindowsErr(PyExc_OSError, WSAGetLastError())
+#include "plibc_inet_ntop.c"
+#define inet_ntop plibc_inet_ntop
 #else
 #define PY_SOCKET_ERROR PyErr_SetFromErrno(PyExc_OSError)
 #include <sys/socket.h>
