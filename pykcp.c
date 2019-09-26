@@ -112,6 +112,14 @@ PyObject_ToUInt(PyObject *object, unsigned int *value) {
 	return 1;
 }
 
+typedef union {
+	struct sockaddr _any;
+	struct sockaddr_in6 _in6;
+	struct sockaddr_in _in;
+	uint8_t _in_s[INET_ADDRSTRLEN];
+	uint8_t _in6_s[INET6_ADDRSTRLEN];
+} addr_t;
+
 typedef struct {
 	PyObject_HEAD
 
@@ -119,7 +127,7 @@ typedef struct {
 	int send_error;
 	int send_errno;
 
-	struct sockaddr dst;
+	addr_t dst;
 	socklen_t dst_len;
 
 	ikcpcb* ctx;
@@ -218,7 +226,10 @@ socksend(const char *buf, int len, ikcpcb *kcp, void *user) {
 	int err;
 
 	if (v->dst_len) {
-		err = sendto(v->fd, buf, len, 0, &v->dst, v->dst_len);
+		err = sendto(
+			v->fd, buf, len, 0,
+			(struct sockaddr *) &v->dst, v->dst_len
+		);
 	} else {
 		err = send(v->fd, buf, len, 0);
 	}
@@ -1052,7 +1063,8 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 	ssize_t msgsize;
 
 	char buf[8196];
-	struct sockaddr addr;
+	addr_t addr;
+
 	socklen_t addrlen = 0;
 	int port;
 	char skey[1024];
@@ -1137,13 +1149,17 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 	for (;;) {
 		PyObject *pynew = NULL;
-		struct sockaddr this_addr;
+		addr_t this_addr;
 		socklen_t this_addrlen;
 		int this_port;
 
 		this_addrlen = sizeof(this_addr);
 
-		msgsize = recvfrom(self->fd, buf, sizeof(buf), 0, &this_addr, &this_addrlen);
+		msgsize = recvfrom(
+			self->fd, buf, sizeof(buf), 0,
+			(struct sockaddr *) &this_addr,
+			&this_addrlen
+		);
 
 		if (msgsize == -1) {
 #ifdef _WINSOCKAPI_
@@ -1167,19 +1183,13 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 			size_t offset;
 
 			switch (this_addrlen) {
-			case INET6_ADDRSTRLEN:
-#ifdef _WIN32
 			case sizeof(struct sockaddr_in6):
-#endif
 				this_port = ntohs(((struct sockaddr_in6*)&this_addr)->sin6_port);
 				family = AF_INET6;
 				offset = offsetof(struct sockaddr_in6, sin6_addr);
 				break;
 
-			case INET_ADDRSTRLEN:
-#ifdef _WIN32
 			case sizeof(struct sockaddr_in):
-#endif
 				this_port = ntohs(((struct sockaddr_in*)&this_addr)->sin_port);
 				family = AF_INET;
 				offset = offsetof(struct sockaddr_in, sin_addr);
