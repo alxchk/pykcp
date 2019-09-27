@@ -116,8 +116,8 @@ typedef union {
 	struct sockaddr _any;
 	struct sockaddr_in6 _in6;
 	struct sockaddr_in _in;
-	uint8_t _in_s[INET_ADDRSTRLEN];
-	uint8_t _in6_s[INET6_ADDRSTRLEN];
+	unsigned char _in_s[INET_ADDRSTRLEN];
+	unsigned char _in6_s[INET6_ADDRSTRLEN];
 } addr_t;
 
 typedef struct {
