@@ -27,12 +27,65 @@ typedef int SOCKET;
 #define SOCKET_ERROR -1
 #endif
 
+#if PY_MAJOR_VERSION >= 3
+    #define PyInt_FromLong PyLong_FromLong
+	#define PyInt_Check PyLong_Check
+	#define PyInt_AsLong PyLong_AsLong
+
+	#define PyString_Check PyUnicode_Check
+
+	#define PyObject_CheckDispatchKeyType PyUnicode_Check
+	#define PyObject_FromAddress PyUnicode_FromString
+#else
+	#define PyBytes_Check PyString_Check
+	#define PyBytes_CheckExact PyString_CheckExact
+	#define PyBytes_AsString PyString_AsString
+	#define PyBytes_AS_STRING PyString_AS_STRING
+	#define PyBytes_GET_SIZE PyString_GET_SIZE
+	#define PyBytes_FromStringAndSize PyString_FromStringAndSize
+
+	#define PyObject_CheckDispatchKeyType PyString_Check
+	#define PyObject_FromAddress PyString_FromString
+
+	#define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+#endif
+
 #define RETURN_NONE do {							\
 		Py_INCREF(Py_None); return Py_None;			\
 	} while(0)
 
+#define MAX_IP_ADDRESS_BUFFER 32
 
 static PyObject *kcp_ErrorObject = NULL;
+
+static inline char *
+PyObject_ToCString(PyObject *object, char *buf, size_t bufsize) {
+	PyObject *tmp_bytes = NULL;
+
+	if (PyBytes_Check(object))
+		return PyBytes_AsString(object);
+
+	if (!PyUnicode_Check(object)) {
+		PyErr_SetString(
+			kcp_ErrorObject, "Bad remote address type. Should be string"
+		);
+
+		return NULL;
+	}
+
+	tmp_bytes = PyUnicode_AsEncodedString(object, "ascii", "strict");
+	if (!tmp_bytes) {
+		PyErr_SetString(
+			kcp_ErrorObject, "Invalid symbols"
+		);
+
+		return NULL;
+	}
+
+	strncpy(buf, PyBytes_AS_STRING(tmp_bytes), bufsize);
+	Py_DECREF(tmp_bytes);
+	return buf;
+}
 
 static inline int
 PyObject_ToLong(PyObject *object, long *value) {
@@ -197,7 +250,8 @@ kcp_KCPObjectType_dealloc(PyObject* self) {
 		ikcp_release(v->ctx);
 
 	v->ctx = NULL;
-	v->ob_type->tp_free(self);
+
+	Py_TYPE(v)->tp_free(self);
 }
 
 static PyObject *
@@ -259,6 +313,8 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 	int resend = 0;
 	int nc = 1;
 
+	char addr_buf[64];
+
 	PyObject *dsttarget = NULL;
 	PyObject *fd = NULL;
 	PyObject *family = NULL;
@@ -316,12 +372,10 @@ kcp_KCPObjectType_init(pkcp_KCPObject self, PyObject *args, PyObject *kwds)
 		}
 
 		raddr = PyTuple_GetItem(dsttarget, 2);
-		if (!PyString_Check(raddr)) {
-			err = "Bad remote address type. Should be string";
-			goto lbEnd;
-		}
 
-		s_raddr = PyString_AsString(raddr);
+		s_raddr = PyObject_ToCString(raddr, addr_buf, sizeof(addr_buf));
+		if (!s_raddr)
+			goto lbEnd;
 
 		rport = PyTuple_GetItem(dsttarget, 3);
 		if (!PyObject_ToInt(rport, &i_port)) {
@@ -596,13 +650,15 @@ kcp_KCPObjectType_send(PyObject* self,  PyObject* data) {
 	if (PyByteArray_CheckExact(data)) {
 		buf = PyByteArray_AS_STRING(data);
 		len = PyByteArray_GET_SIZE(data);
-	} else if (PyString_CheckExact(data)) {
-		buf = PyString_AS_STRING(data);
-		len = PyString_GET_SIZE(data);
+	} else if (PyBytes_CheckExact(data)) {
+		buf = PyBytes_AS_STRING(data);
+		len = PyBytes_GET_SIZE(data);
 	} else if (data == Py_None) {
 		RETURN_NONE;
 	} else {
-		PyErr_SetString(kcp_ErrorObject, "Only bytearray or string types are allowed");
+		PyErr_SetString(
+			kcp_ErrorObject, "Only bytearray or bytes types are allowed"
+		);
 		return NULL;
 	}
 
@@ -629,9 +685,9 @@ kcp_KCPObjectType_submit(PyObject* self,  PyObject* data) {
 	if (PyByteArray_CheckExact(data)) {
 		buf = PyByteArray_AS_STRING(data);
 		len = PyByteArray_GET_SIZE(data);
-	} else if (PyString_CheckExact(data)) {
-		buf = PyString_AS_STRING(data);
-		len = PyString_GET_SIZE(data);
+	} else if (PyBytes_CheckExact(data)) {
+		buf = PyBytes_AS_STRING(data);
+		len = PyBytes_GET_SIZE(data);
 	} else if (data == Py_None) {
 		RETURN_NONE;
 	} else {
@@ -752,7 +808,7 @@ kcp_KCPObjectType_pollread(PyObject* self,  PyObject* val) {
 				if (kcprecv <= 0) {
 					retbuf = Py_None;
 				} else {
-					retbuf = PyString_FromStringAndSize(rawbuf, kcprecv);
+					retbuf = PyBytes_FromStringAndSize(rawbuf, kcprecv);
 				}
 			}
 		}
@@ -804,7 +860,7 @@ kcp_KCPObjectType_recv(PyObject* self,  PyObject* data) {
 		RETURN_NONE;
 	}
 
-	return PyString_FromStringAndSize(buffer, len);
+	return PyBytes_FromStringAndSize(buffer, len);
 }
 
 static PyObject*
@@ -817,7 +873,6 @@ kcp_KCPObjectType_update_clock(PyObject* self,  PyObject* val) {
 		PyErr_SetString(kcp_ErrorObject, "Argument should be unsigned integer");
 		return NULL;
 	}
-
 
 	ikcp_update(v->ctx, clk);
 	next = ikcp_check(v->ctx, clk) - clk;
@@ -971,7 +1026,7 @@ kcp_KCPDispatcherObjectType_dealloc(PyObject* object) {
 
 	Py_XDECREF(self->table);
 
-	self->ob_type->tp_free(object);
+	Py_TYPE(self)->tp_free(object);
 }
 
 static int
@@ -1009,8 +1064,10 @@ kcp_KCPDispatcherObjectType_get(PyObject* object,  PyObject* val) {
 	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
 	PyObject *value;
 
-	if (!PyString_CheckExact(val)) {
-		PyErr_SetString(kcp_ErrorObject, "Key should be string (\"host:port\")");
+	if (!PyObject_CheckDispatchKeyType(val)) {
+		PyErr_SetString(
+			kcp_ErrorObject, "Key should be string (\"host:port\")"
+		);
 		return NULL;
 	}
 
@@ -1031,8 +1088,10 @@ kcp_KCPDispatcherObjectType_keys(PyObject* object,  PyObject* val) {
 static PyObject*
 kcp_KCPDispatcherObjectType_delete(PyObject* object,  PyObject* val) {
 	pkcp_KCPDispatcherObject self = (pkcp_KCPDispatcherObject) object;
-	if (!val || !PyString_CheckExact(val)) {
-		PyErr_SetString(kcp_ErrorObject, "Key should be string (\"host:port\")");
+	if (!val || !PyObject_CheckDispatchKeyType(val)) {
+		PyErr_SetString(
+			kcp_ErrorObject, "Key should be string (\"host:port\")"
+		);
 		return NULL;
 	}
 
@@ -1209,7 +1268,7 @@ kcp_KCPDispatcherObjectType_dispatch(PyObject* object,  PyObject* val) {
 
 			snprintf(skey, sizeof(skey)-1, "%s:%d", addrinfoparsed, this_port);
 			Py_XDECREF(pykey);
-			pykey = PyString_FromString(skey);
+			pykey = PyObject_FromAddress(skey);
 
 			memcpy(&addr, &this_addr, this_addrlen);
 			addrlen = this_addrlen;
@@ -1375,20 +1434,45 @@ kcp_KCPDispatcherObjectType = {
 #define KCPDispatcherObjectType_CheckExact(op)	\
 	(Py_TYPE(op) == &kcp_KCPDispatcherObjectType)
 
-DL_EXPORT(void)
-initkcp(void)
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef kcp_moduledef = {
+	PyModuleDef_HEAD_INIT,
+	"kcp", /* m_name */
+	"KCP wrapper for python", /* m_doc */
+	-1, /* m_size */
+	NULL, /* m_methods */
+	NULL, /* m_reload */
+	NULL, /* m_traverse */
+	NULL, /* m_clear */
+	NULL, /* m_free */
+};
+#endif
+
+#if PY_MAJOR_VERSION >= 3
+#define RETURN_FAIL NULL
+#define RETURN_MODULE(x) x
+PyMODINIT_FUNC PyInit_kcp(void)
+#else
+#define RETURN_FAIL
+#define RETURN_MODULE(x)
+PyMODINIT_FUNC initkcp(void)
+#endif
 {
 	PyObject *kcp;
 
 	if (PyType_Ready(&kcp_KCPObjectType) < 0)
-        return;
+        return RETURN_FAIL;
 
 	if (PyType_Ready(&kcp_KCPDispatcherObjectType) < 0)
-        return;
+        return RETURN_FAIL;
 
+#if PY_MAJOR_VERSION >= 3
+	kcp = PyModule_Create(&kcp_moduledef);
+#else
 	kcp = Py_InitModule3("kcp", NULL, "KCP python bindings");
+#endif
     if (!kcp) {
-        return;
+        return RETURN_FAIL;
     }
 
 	PyModule_AddIntConstant(kcp, "ENABLE_NODELAY", 1);
@@ -1408,4 +1492,6 @@ initkcp(void)
 	Py_INCREF(&kcp_KCPDispatcherObjectType);
     PyModule_AddObject(kcp, "KCP", (PyObject *)&kcp_KCPObjectType);
     PyModule_AddObject(kcp, "KCPDispatcher", (PyObject *)&kcp_KCPDispatcherObjectType);
+
+	return RETURN_MODULE(kcp);
 }
